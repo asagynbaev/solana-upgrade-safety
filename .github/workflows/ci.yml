@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  layout-diff:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scripts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - name: Regression suite
+        run: npm test
+      - name: Integration tests (realistic IDLs + install.sh end-to-end)
+        run: npm run test:integration
+      - name: Fixtures behave as documented
+        run: |
+          set -e
+          # v1 -> v2 (mid-insert) must be BREAKING -> non-zero exit
+          if npx tsx layout-diff.ts ../examples/vault.v1.idl.json ../examples/vault.v2.idl.json; then
+            echo "::error::expected non-zero exit for BREAKING upgrade"; exit 1
+          fi
+          # v1 -> v3 (tail append) is NEEDS_MIGRATION -> exit 0, but exit 1 under --strict
+          npx tsx layout-diff.ts ../examples/vault.v1.idl.json ../examples/vault.v3.idl.json
+          if npx tsx layout-diff.ts ../examples/vault.v1.idl.json ../examples/vault.v3.idl.json --strict; then
+            echo "::error::expected non-zero exit for NEEDS_MIGRATION under --strict"; exit 1
+          fi
+          # v1 -> v1 (identical) must be SAFE -> exit 0
+          npx tsx layout-diff.ts ../examples/vault.v1.idl.json ../examples/vault.v1.idl.json
