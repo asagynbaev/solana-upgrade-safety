@@ -74,6 +74,12 @@ misread.
   orphaned, and accounts stay over-allocated (over-rented). Reclaim space via
   `realloc`/re-init if it matters. (This is *not* corruption — contrast inserting or
   removing a field in the middle, which is BREAKING.)
+- **An otherwise-clean account that leans on an unresolvable nested type.** If a
+  field is typed `{defined: Foo}` and `Foo` isn't in `types[]` (external crate,
+  partial/hand-edited IDL), the differ can't see inside it, so a change *within* `Foo`
+  would be invisible. Rather than print a false-green SAFE, it downgrades the account
+  to REVIEW and names the unresolved type. Resolve the type into `types[]` (or diff it
+  separately) and fork-replay before shipping.
 
 ### NEEDS_MIGRATION (action required, not corruption-by-default)
 - **Appending fields at the tail only**, with the entire old prefix unchanged.
@@ -116,8 +122,11 @@ misread.
   byte-compatible, but the differ flags it conservatively as a nested change. (Enum
   variant *reordering/insertion* IS caught, since the differ compares variant order;
   still, append variants only.)
-- **Cyclic and generic `defined` types** — these fall back to a name-only
-  comparison, so a change deep inside a cycle or behind a generic param may be missed.
+- **Cyclic, generic, or absent-from-`types[]` `defined` types** — these fall back to
+  a name-only comparison, so a change deep inside a cycle or behind a generic param
+  may be missed. (An account whose layout depends on a type *missing* from `types[]`
+  is at least surfaced as REVIEW with the type named — see above — but the cycle and
+  generic cases compare equal silently. Fork-replay any of these.)
 - **Default/`InitSpace` size assumptions** in your `init`/`realloc` space math.
 
 ## Quick decision
@@ -131,6 +140,7 @@ layout change?
 │   retyped, mid-removed, reordered, or a
 │   nested struct/enum changed .............. BREAKING → redesign (safe-evolution-patterns.md)
 │                                                        or migrate + replay on fork
+├── nested defined type missing from types[]  REVIEW (can't see inside it; resolve + replay)
 ├── struct can't be resolved in types[] ..... UNKNOWN → resolve the type, verify by hand
 └── zero_copy touched at all ................ verify size_of/offset_of by hand, then re-run diff
 ```

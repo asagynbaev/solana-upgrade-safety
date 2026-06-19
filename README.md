@@ -147,13 +147,21 @@ or run the command:
   the diff flags obvious changes but you must verify `size_of` / `offset_of!` by
   hand; the skill tells you when and how.
 - **It can't detect semantic reinterpretation.** If a `u64` that meant lamports now
-  means basis points, the layout is identical and only a human catches it.
-- **Nested `defined` structs/enums are resolved** against each IDL's `types[]`, so a
-  change inside an embedded struct, and an enum variant reorder/insert on an
-  enum-typed field, are flagged. Two exceptions fall back to a *nominal* (name-only)
-  comparison: a type referenced through a **cycle**, and **generic** type params.
-  Those, and any account whose struct can't be resolved at all (reported `UNKNOWN`),
-  still need a fork replay.
+  means basis points, the layout is identical and only a human catches it. Same for
+  swapping two same-type fields (e.g. two `u64`s): the bytes don't move, so the diff
+  reports `REVIEW` (a name swap to confirm), not `BREAKING` — but the *meaning* of
+  those bytes has flipped, and only you can judge that.
+- **Nested `defined` structs/enums/aliases are resolved** against each IDL's `types[]`,
+  so a change inside an embedded struct, an enum variant reorder/insert on an
+  enum-typed field, or a widened type alias (`type Buf = [u8; 32]` → `[u8; 64]`), are
+  all flagged. Three things fall back to a *nominal* (name-only)
+  comparison: a type referenced through a **cycle**, **generic** type params, and a
+  type **not present in `types[]`** at all (e.g. pulled from an external crate). The
+  differ won't call such an account a confident `SAFE` — an otherwise-clean account
+  whose layout leans on an unresolvable nested type is downgraded to `REVIEW` with a
+  note naming the type, because a change *inside* it would be invisible here. Those,
+  and any account whose own struct can't be resolved (reported `UNKNOWN`), still need
+  a fork replay.
 - **It compares IDLs, not source.** Keep your IDL in sync with the program
   (`anchor build`), or the diff is comparing the wrong thing.
 - The differ supports Anchor's legacy (fields inline on `accounts`) and 0.30+/Codama

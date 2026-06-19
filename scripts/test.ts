@@ -141,6 +141,82 @@ const unresNew = idl({ metadata: { name: "p" }, accounts: [{ name: "Vault" }], t
 expect("unresolved struct -> UNKNOWN", run(unresOld, unresNew), "Vault", "UNKNOWN", 0);
 check("unresolved -> exit 1 under --strict", run(unresOld, unresNew, "--strict").exit, 1);
 
+// nested `defined` type MISSING from types[] (in both): the account struct resolves
+// but its field's inner layout can't be seen — must NOT be a confident SAFE. We
+// downgrade to REVIEW with a note rather than printing a false green "all clear".
+const missingNested = (extra: object = {}) =>
+  ({ metadata: { name: "p" }, accounts: [{ name: "A", type: { kind: "struct", fields: [{ name: "c", type: { defined: "Config" } }, { name: "b", type: "u8" }] } }], ...extra });
+expect("nested defined missing from types[] -> REVIEW not SAFE",
+  run(idl(missingNested()), idl(missingNested())), "A", "REVIEW", 0);
+check("...and not blocked by --strict (exit 0)", run(idl(missingNested()), idl(missingNested()), "--strict").exit, 0);
+// but once the type IS in types[] and unchanged, it's a real SAFE (no over-warning)
+const withConfig = (fee: string) =>
+  ({ metadata: { name: "p" }, accounts: [{ name: "A", type: { kind: "struct", fields: [{ name: "c", type: { defined: "Config" } }, { name: "b", type: "u8" }] } }], types: [{ name: "Config", type: { kind: "struct", fields: [{ name: "fee", type: fee }] } }] });
+expect("resolved nested + unchanged -> real SAFE", run(idl(withConfig("u16")), idl(withConfig("u16"))), "A", "SAFE", 0);
+
+// same-type reorder: two u64 swapped. Bytes don't shift (both u64 at both offsets),
+// only the names swap — byte-compatible, so REVIEW (semantic swap a human must judge),
+// NOT BREAKING. Pins the boundary against the "reorder different types" BREAKING case.
+expect("same-type reorder -> REVIEW (byte-compatible name swap)",
+  run(idl(acct("A", [{ name: "a", type: "u64" }, { name: "b", type: "u64" }])),
+      idl(acct("A", [{ name: "b", type: "u64" }, { name: "a", type: "u64" }]))), "A", "REVIEW", 0);
+
+// fixed-array length change shifts every following byte → BREAKING
+expect("array length change [u8;32]->[u8;64]",
+  run(idl(acct("A", [{ name: "x", type: { array: ["u8", 32] } }])),
+      idl(acct("A", [{ name: "x", type: { array: ["u8", 64] } }]))), "A", "BREAKING", 1);
+
+// option inner-type change and option-vs-coption (1-byte vs 4-byte tag) → BREAKING
+expect("option<u32> -> option<u64>",
+  run(idl(acct("A", [{ name: "x", type: { option: "u32" } }])),
+      idl(acct("A", [{ name: "x", type: { option: "u64" } }]))), "A", "BREAKING", 1);
+expect("option<u64> -> coption<u64> (tag width differs)",
+  run(idl(acct("A", [{ name: "x", type: { option: "u64" } }])),
+      idl(acct("A", [{ name: "x", type: { coption: "u64" } }]))), "A", "BREAKING", 1);
+
+// vec element retype changes per-element encoding of the heap payload → BREAKING
+expect("vec<u32> -> vec<u64>",
+  run(idl(acct("A", [{ name: "xs", type: { vec: "u32" } }])),
+      idl(acct("A", [{ name: "xs", type: { vec: "u64" } }]))), "A", "BREAKING", 1);
+
+// enum struct-style (named-field) variant gains a field → variant payload grows → BREAKING
+const enumNamed = (closedFields: Array<{ name: string; type: string }>) =>
+  ({ metadata: { name: "p" }, accounts: [{ name: "A", type: { kind: "struct", fields: [{ name: "s", type: { defined: "St" } }] } }], types: [{ name: "St", type: { kind: "enum", variants: [{ name: "Open" }, { name: "Closed", fields: closedFields }] } }] });
+expect("enum named-variant gains a field",
+  run(idl(enumNamed([{ name: "at", type: "u64" }])),
+      idl(enumNamed([{ name: "at", type: "u64" }, { name: "by", type: "pubkey" }]))), "A", "BREAKING", 1);
+
+// self-referential (cyclic) type: the cycle guard must let the diff terminate AND
+// still catch a change to a non-cyclic field (here v: u64 -> u128). No hang, BREAKING.
+const cyclic = (vType: string) =>
+  ({ metadata: { name: "p" }, accounts: [{ name: "A", type: { kind: "struct", fields: [{ name: "next", type: { option: { defined: "A" } } }, { name: "v", type: vType }] } }], types: [{ name: "A", type: { kind: "struct", fields: [{ name: "next", type: { option: { defined: "A" } } }, { name: "v", type: vType }] } }] });
+expect("cyclic type retyped -> BREAKING (no hang)", run(idl(cyclic("u64")), idl(cyclic("u128"))), "A", "BREAKING", 1);
+expect("cyclic type unchanged -> SAFE (back-edge not over-flagged)", run(idl(cyclic("u64")), idl(cyclic("u64"))), "A", "SAFE", 0);
+
+// codama thin account (struct in types[], discriminator present) + tail append
+const codama = (fields: Array<{ name: string; type: string }>) =>
+  ({ metadata: { name: "p" }, accounts: [{ name: "Vault", discriminator: [1, 2, 3, 4, 5, 6, 7, 8] }], types: [{ name: "Vault", type: { kind: "struct", fields } }] });
+expect("codama format tail append -> NEEDS_MIGRATION",
+  run(idl(codama([{ name: "owner", type: "pubkey" }])),
+      idl(codama([{ name: "owner", type: "pubkey" }, { name: "paused", type: "bool" }]))), "Vault", "NEEDS_MIGRATION", 0);
+
+// zero-field account on both sides is trivially SAFE (no false append/removal)
+expect("empty-struct account -> SAFE", run(idl(acct("A", [])), idl(acct("A", []))), "A", "SAFE", 0);
+
+// Anchor type alias ({kind:"type", alias}) is resolved, not treated as opaque: a
+// change to the aliased type must shift bytes and read as BREAKING — NOT hide behind
+// the alias name as a false REVIEW/SAFE. (Regression for the alias false-negative.)
+const aliased = (len: number) =>
+  ({ metadata: { name: "p" }, accounts: [{ name: "S", type: { kind: "struct", fields: [{ name: "h", type: { defined: "Buf" } }, { name: "o", type: "pubkey" }] } }], types: [{ name: "Buf", type: { kind: "type", alias: { array: ["u8", len] } } }] });
+expect("type alias body widened [u8;32]->[u8;64] -> BREAKING",
+  run(idl(aliased(32)), idl(aliased(64))), "S", "BREAKING", 1);
+expect("type alias unchanged -> SAFE (resolved, not over-flagged)",
+  run(idl(aliased(32)), idl(aliased(32))), "S", "SAFE", 0);
+// alias -> alias chain: change at the end of the chain still propagates to BREAKING
+const aliasChain = (len: number) =>
+  ({ metadata: { name: "p" }, accounts: [{ name: "S", type: { kind: "struct", fields: [{ name: "h", type: { defined: "Buf" } }, { name: "o", type: "u8" }] } }], types: [{ name: "Buf", type: { kind: "type", alias: { defined: "Inner" } } }, { name: "Inner", type: { kind: "type", alias: { array: ["u8", len] } } }] });
+expect("alias->alias chain change -> BREAKING", run(idl(aliasChain(16)), idl(aliasChain(24))), "S", "BREAKING", 1);
+
 // malformed input → exit 2 (not misreported as BREAKING/exit 1)
 check("malformed JSON exit 2", run(idl("{ not json"), idl(acct("A", [u("u64")]))).exit, 2);
 check("accounts not an array exit 2", run(idl({ accounts: { foo: "bar" } }), idl({ accounts: { foo: "bar" } })).exit, 2);
