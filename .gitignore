@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+scripts/node_modules/
+scripts/package-lock.json
+
+# logs / OS / editor
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Solana/Anchor build output (when working inside a program repo)
+target/
+*.so
+
+# local IDL scratch the docs tell users to create (never the examples/ fixtures)
+scripts/old.idl.json
+scripts/new.idl.json
+scripts/*.tmp.json
+scripts/def_*.json
