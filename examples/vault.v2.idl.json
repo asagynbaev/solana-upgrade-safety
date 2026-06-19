@@ -1,0 +1,14 @@
+{
+  "address": "Vau1tProgram1111111111111111111111111111111",
+  "metadata": { "name": "vault", "version": "2.0.0" },
+  "accounts": [ { "name": "Vault", "discriminator": [211,8,232,43,2,152,117,119] } ],
+  "types": [
+    { "name": "Vault", "type": { "kind": "struct", "fields": [
+      { "name": "owner",      "type": "pubkey" },
+      { "name": "bump",       "type": "u8" },
+      { "name": "paused",     "type": "bool" },
+      { "name": "totalDeposited", "type": "u64" },
+      { "name": "feeBps",     "type": "u16" }
+    ] } }
+  ]
+}
