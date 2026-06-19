@@ -74,6 +74,30 @@ const same = runDiff(tsxBin, DIFF, join(FIX, "lending.v1.idl.json"), join(FIX, "
 check("lending identical: exit 0", same.exit, 0);
 check("lending identical: Market SAFE", same.verdicts.Market, "SAFE");
 
+// ── 1b. Account that leans on a type from an external crate (not in types[]) ──
+// PerpMarket.oracle is `PriceUpdateV2` (a Pyth Receiver type), which a consumer IDL
+// typically does NOT inline. Its layout is byte-identical v1->v2, so a naive diff
+// would greenwash it to SAFE. The differ must instead refuse the confident SAFE,
+// report REVIEW, and NAME the unresolved type — while the fully-resolvable Config
+// (tail-append) still gets its own NEEDS_MIGRATION, proving no verdict is suppressed.
+const ext = runDiff(tsxBin, DIFF, join(FIX, "external-type.v1.idl.json"), join(FIX, "external-type.v2.idl.json"));
+check("external: PerpMarket REVIEW (unresolvable nested type, not false-SAFE)", ext.verdicts.PerpMarket, "REVIEW");
+check("external: Config NEEDS_MIGRATION (tail append, not suppressed)", ext.verdicts.Config, "NEEDS_MIGRATION");
+check("external: REVIEW note names the unresolved type", ext.raw.includes("PriceUpdateV2"), true);
+check("external: exit 0 (no breaking; REVIEW+migration don't gate without --strict)", ext.exit, 0);
+check("external: --strict exits 1 (Config NEEDS_MIGRATION drives it, not PerpMarket REVIEW)",
+  runDiff(tsxBin, DIFF, join(FIX, "external-type.v1.idl.json"), join(FIX, "external-type.v2.idl.json"), "--strict").exit, 1);
+// identical external-type IDL: PerpMarket is STILL REVIEW (can't verify), Config SAFE
+const extSame = runDiff(tsxBin, DIFF, join(FIX, "external-type.v1.idl.json"), join(FIX, "external-type.v1.idl.json"));
+check("external identical: PerpMarket still REVIEW (layout unseen, never SAFE)", extSame.verdicts.PerpMarket, "REVIEW");
+check("external identical: Config SAFE (fully resolvable, unchanged)", extSame.verdicts.Config, "SAFE");
+check("external identical: exit 0", extSame.exit, 0);
+// load-bearing: REVIEW must NOT gate even under --strict. If PerpMarket's
+// unresolved-type logic regressed to UNKNOWN, --strict would exit 1 here — this
+// pins it to REVIEW, distinct from UNKNOWN, with nothing else to mask the result.
+check("external identical --strict: exit 0 (REVIEW alone never gates, unlike UNKNOWN)",
+  runDiff(tsxBin, DIFF, join(FIX, "external-type.v1.idl.json"), join(FIX, "external-type.v1.idl.json"), "--strict").exit, 0);
+
 // ── 2. End-to-end install flow ──────────────────────────────────────────────
 const installSh = join(REPO, "install.sh");
 const hasBash = spawnSync("bash", ["--version"], { encoding: "utf8" }).status === 0;

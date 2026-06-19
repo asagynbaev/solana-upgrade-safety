@@ -16,9 +16,12 @@
  * Verdicts:
  *   SAFE             — new account type, or no layout-affecting change.
  *   REVIEW           — byte-compatible but worth a human look: a same-type field
- *                      rename (clients/IDL key on names), or a trailing field
- *                      removed (old accounts still deserialize; the removed data is
- *                      orphaned and the account stays over-allocated). Not fatal.
+ *                      rename (clients/IDL key on names), a trailing field removed
+ *                      (old accounts still deserialize; the removed data is orphaned
+ *                      and the account stays over-allocated), or an otherwise-clean
+ *                      account whose layout leans on a nested `defined` type that
+ *                      isn't in types[] (so a change inside it can't be seen here).
+ *                      Not fatal.
  *   NEEDS_MIGRATION  — fields appended at the tail only. Old accounts are shorter;
  *                      they will fail to deserialize until you realloc + backfill
  *                      (or use a versioned deserializer). Action required, not fatal.
@@ -142,8 +145,15 @@ function typeKey(type: any): string {
  * enum variant order/structure does matter — the tag is positional). Two types
  * with the same signature serialize identically; a change anywhere inside a nested
  * type changes the signature. Cycle-guarded with a DFS path-set.
+ *
+ * `unresolved` (optional) collects the names of `defined` types that could NOT be
+ * resolved against `types[]` (missing entry, or a kind we can't model). When a sig
+ * leans on such a name, two sides compare equal *by name only* — a change inside
+ * that unseen type is invisible here — so the caller must not report a confident
+ * SAFE. Cycle back-edges are NOT recorded: the cycle's real layout is already
+ * diffed where the type first resolves at the top of the path.
  */
-function fieldTypeSig(type: any, types: any[], seen = new Set<string>()): string {
+function fieldTypeSig(type: any, types: any[], seen = new Set<string>(), unresolved?: Set<string>): string {
   const c = canon(type);
   if (typeof c === "string") return c;
   if (c && typeof c === "object") {
@@ -151,29 +161,36 @@ function fieldTypeSig(type: any, types: any[], seen = new Set<string>()): string
       const name = c.defined;
       if (seen.has(name)) return `defined(${name})`; // cycle → fall back to nominal
       const def = types.find((t) => t?.name === name);
-      if (!def || !def.type) return `defined(${name})`; // unresolvable → nominal
+      if (!def || !def.type) { unresolved?.add(name); return `defined(${name})`; } // unresolvable → nominal
       const next = new Set(seen).add(name);
       if (def.type.kind === "struct") {
-        const inner = (def.type.fields ?? []).map((f: any) => fieldTypeSig(f.type, types, next));
+        const inner = (def.type.fields ?? []).map((f: any) => fieldTypeSig(f.type, types, next, unresolved));
         return `struct(${inner.join(",")})`;
       }
       if (def.type.kind === "enum") {
         const vs = (def.type.variants ?? []).map((v: any) => {
           const vf = Array.isArray(v?.fields)
-            ? v.fields.map((f: any) => fieldTypeSig(f?.type ?? f, types, next)).join(",")
+            ? v.fields.map((f: any) => fieldTypeSig(f?.type ?? f, types, next, unresolved)).join(",")
             : "";
           return `${v?.name ?? ""}[${vf}]`;
         });
         return `enum(${vs.join("|")})`;
       }
+      // Anchor type alias (`type Buf = [u8; 32]`): {kind:"type", alias:<IdlType>}. The
+      // alias body IS in the IDL, so resolve it — otherwise a change to the aliased
+      // type (e.g. [u8;32]->[u8;64]) would hide behind the name and read as byte-safe.
+      if (def.type.kind === "type" && def.type.alias !== undefined) {
+        return fieldTypeSig(def.type.alias, types, next, unresolved);
+      }
+      unresolved?.add(name); // resolvable entry but a kind we don't model → nominal
       return `defined(${name})`;
     }
-    if (c.option !== undefined) return `option(${fieldTypeSig(c.option, types, seen)})`;
-    if (c.coption !== undefined) return `coption(${fieldTypeSig(c.coption, types, seen)})`;
-    if (c.vec !== undefined) return `vec(${fieldTypeSig(c.vec, types, seen)})`;
+    if (c.option !== undefined) return `option(${fieldTypeSig(c.option, types, seen, unresolved)})`;
+    if (c.coption !== undefined) return `coption(${fieldTypeSig(c.coption, types, seen, unresolved)})`;
+    if (c.vec !== undefined) return `vec(${fieldTypeSig(c.vec, types, seen, unresolved)})`;
     if (c.array !== undefined) {
       const [inner, len] = c.array;
-      return `array(${fieldTypeSig(inner, types, seen)};${JSON.stringify(len)})`;
+      return `array(${fieldTypeSig(inner, types, seen, unresolved)};${JSON.stringify(len)})`;
     }
     return JSON.stringify(c);
   }
@@ -213,6 +230,12 @@ function sizeOf(type: any, types: any[], seen = new Set<string>()): number | nul
         }
         seen.delete(name); // ...and release on exit so sibling fields can reuse the type
         return total;
+      }
+      if (def.type?.kind === "type" && def.type.alias !== undefined) {
+        seen.add(name);
+        const s = sizeOf(def.type.alias, types, seen);
+        seen.delete(name);
+        return s;
       }
       return null; // enums are tag + variant → variable
     }
@@ -265,12 +288,18 @@ function diffAccount(
   const common = Math.min(o.length, n.length);
 
   // Walk the shared prefix. A type/identity divergence shifts all following bytes;
-  // a same-type rename does not, so we note it and keep scanning.
+  // a same-type rename does not, so we note it and keep scanning. `unresolved`
+  // collects any nested `defined` type we couldn't see inside (missing from types[]):
+  // those compare equal by name only, so an internal change would slip past — we
+  // refuse to call such an account a confident SAFE below.
   let divergedAt = -1;
   const renameNotes: string[] = [];
+  const unresolved = new Set<string>();
   for (let i = 0; i < common; i++) {
     const sameName = o[i].name === n[i].name;
-    const sameType = fieldTypeSig(o[i].type, oldTypes) === fieldTypeSig(n[i].type, newTypes);
+    const sameType =
+      fieldTypeSig(o[i].type, oldTypes, new Set(), unresolved) ===
+      fieldTypeSig(n[i].type, newTypes, new Set(), unresolved);
 
     if (sameName && sameType) continue;
 
@@ -313,13 +342,21 @@ function diffAccount(
     return { account: name, verdict: "BREAKING", reasons: [...reasons, ...renameNotes] };
   }
 
+  // A clean prefix that leans on a type we couldn't resolve isn't a verified-clean
+  // prefix — an internal change in that type would have been invisible above.
+  const unresolvedNote = unresolved.size
+    ? [`could not verify the internal layout of referenced type(s) ` +
+       `${[...unresolved].sort().join(", ")} (not resolvable in types[]) — a change inside them is ` +
+       `invisible to this diff; confirm by hand or with a fork replay (fork-simulation.md)`]
+    : [];
+
   // Prefix is layout-identical (modulo renames). The length difference decides.
   if (n.length > o.length) {
     const added = n.slice(o.length).map((f) => `${f.name}: ${typeKey(f.type)}`);
     reasons.push(`appended ${n.length - o.length} field(s) at the tail: ${added.join(", ")}`);
     reasons.push("old accounts are shorter and will fail to deserialize until realloc + backfill " +
                  "(see migration-codegen.md) or a versioned deserializer is used");
-    return { account: name, verdict: "NEEDS_MIGRATION", reasons: [...reasons, ...renameNotes] };
+    return { account: name, verdict: "NEEDS_MIGRATION", reasons: [...reasons, ...renameNotes, ...unresolvedNote] };
   }
   if (n.length < o.length) {
     const removed = o.slice(n.length).map((f) => `${f.name}: ${typeKey(f.type)}`);
@@ -328,11 +365,11 @@ function diffAccount(
       `deserialize (borsh ignores the now-extra trailing bytes; the surviving prefix is byte-identical), ` +
       `but the removed data is orphaned and accounts stay over-allocated/over-rented. Reclaim space via ` +
       `realloc/re-init if it matters.`);
-    return { account: name, verdict: "REVIEW", reasons: [...reasons, ...renameNotes] };
+    return { account: name, verdict: "REVIEW", reasons: [...reasons, ...renameNotes, ...unresolvedNote] };
   }
 
-  if (renameNotes.length) {
-    return { account: name, verdict: "REVIEW", reasons: renameNotes };
+  if (renameNotes.length || unresolvedNote.length) {
+    return { account: name, verdict: "REVIEW", reasons: [...renameNotes, ...unresolvedNote] };
   }
   return { account: name, verdict: "SAFE", reasons: ["no layout-affecting change"] };
 }

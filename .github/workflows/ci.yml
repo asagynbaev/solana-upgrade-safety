@@ -22,7 +22,7 @@ jobs:
         run: npm run test:integration
       - name: Fixtures behave as documented
         run: |
-          set -e
+          set -eo pipefail   # pipefail: a differ crash can't be masked by a downstream grep
           # v1 -> v2 (mid-insert) must be BREAKING -> non-zero exit
           if npx tsx layout-diff.ts ../examples/vault.v1.idl.json ../examples/vault.v2.idl.json; then
             echo "::error::expected non-zero exit for BREAKING upgrade"; exit 1
@@ -34,3 +34,11 @@ jobs:
           fi
           # v1 -> v1 (identical) must be SAFE -> exit 0
           npx tsx layout-diff.ts ../examples/vault.v1.idl.json ../examples/vault.v1.idl.json
+          # external-type pair: account leans on a type missing from types[]. Must NOT
+          # be a confident SAFE -> REVIEW naming the type; exit 0, but exit 1 under --strict
+          # (Config tail-append is NEEDS_MIGRATION).
+          npx tsx layout-diff.ts ../tests/fixtures/external-type.v1.idl.json ../tests/fixtures/external-type.v2.idl.json \
+            | grep -q "PriceUpdateV2" || { echo "::error::expected REVIEW note naming the unresolved type"; exit 1; }
+          if npx tsx layout-diff.ts ../tests/fixtures/external-type.v1.idl.json ../tests/fixtures/external-type.v2.idl.json --strict; then
+            echo "::error::expected non-zero exit under --strict (NEEDS_MIGRATION present)"; exit 1
+          fi

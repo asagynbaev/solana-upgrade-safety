@@ -1,0 +1,32 @@
+{
+  "address": "Perp1111111111111111111111111111111111111111",
+  "metadata": { "name": "perp", "version": "1.0.0", "spec": "0.1.0" },
+  "instructions": [],
+  "accounts": [
+    { "name": "PerpMarket", "discriminator": [99, 1, 2, 3, 4, 5, 6, 7] },
+    { "name": "Config", "discriminator": [99, 8, 9, 10, 11, 12, 13, 14] }
+  ],
+  "types": [
+    {
+      "name": "PerpMarket",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "authority", "type": "pubkey" },
+          { "name": "oracle", "type": { "defined": { "name": "PriceUpdateV2" } } },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "feeBps", "type": "u16" },
+          { "name": "authority", "type": "pubkey" }
+        ]
+      }
+    }
+  ]
+}
