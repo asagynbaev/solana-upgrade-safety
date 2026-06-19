@@ -15,6 +15,6 @@
   "devDependencies": { "tsx": "^4.19.2" },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sagynbaev6/solana-upgrade-safety"
+    "url": "https://github.com/asagynbaev/solana-upgrade-safety"
   }
 }

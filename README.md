@@ -107,7 +107,7 @@ This copies the skill files plus `scripts/` (the differ) and `examples/` into
 ### As a submodule (to slot into the kit)
 
 ```bash
-git submodule add https://github.com/sagynbaev6/solana-upgrade-safety \
+git submodule add https://github.com/asagynbaev/solana-upgrade-safety \
   .claude/skills/ext/solana-upgrade-safety
 ```
 
