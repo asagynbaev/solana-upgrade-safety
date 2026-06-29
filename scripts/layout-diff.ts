@@ -115,7 +115,19 @@ function extractAccounts(idl: any): Map<string, AccountLayout> {
 /** Normalize the IDL representation differences across Anchor versions, recursively. */
 function canon(type: any): any {
   if (typeof type === "string") return type === "publicKey" ? "pubkey" : type;
-  if (Array.isArray(type)) return type.map(canon);
+  if (Array.isArray(type)) {
+    // Borsh fixed-array shorthand: some hand-written / non-canonical IDLs express
+    // `[T; N]` as a bare 2-tuple `["u8", 32]` instead of `{array:["u8",32]}`. The two
+    // are byte-identical, so normalize the tuple to the canonical {array} form (mirrors
+    // publicKey->pubkey) — otherwise a cross-representation diff raises a phantom change.
+    // (type[1] is a number only for the array shorthand; tuple-variant field lists are
+    // arrays of type specs, never `[type, number]`, so they fall through to map.)
+    if (type.length === 2 && typeof type[1] === "number" &&
+        (typeof type[0] === "string" || (type[0] && typeof type[0] === "object"))) {
+      return { array: [canon(type[0]), type[1]] };
+    }
+    return type.map(canon);
+  }
   if (type && typeof type === "object") {
     // {defined:"Foo"} (legacy) and {defined:{name:"Foo"}} (0.30+) → one form.
     if (type.defined !== undefined) {
@@ -125,6 +137,13 @@ function canon(type: any): any {
           ? type.defined.generics.map(canon)
           : undefined;
       return generics ? { defined: name, generics } : { defined: name };
+    }
+    // Canonicalize the fixed-array object form too, so {array:[T,N]} and the bare tuple
+    // ["T",N] above collapse to the SAME normalized shape (and the explicit handling here
+    // avoids double-wrapping the inner [T,N] via the generic object recursion below).
+    if (Array.isArray(type.array)) {
+      const [inner, len] = type.array;
+      return { array: [canon(inner), len] };
     }
     const out: Record<string, any> = {};
     for (const k of Object.keys(type).sort()) out[k] = canon(type[k]);
@@ -208,6 +227,12 @@ const FIXED: Record<string, number> = {
 /** Returns byte size for fixed types, or null if the type is variable-length. */
 function sizeOf(type: any, types: any[], seen = new Set<string>()): number | null {
   if (typeof type === "string") return FIXED[type] ?? null;
+  // bare fixed-array tuple shorthand ["u8", 32] (== {array:["u8",32]}) — keep the
+  // size model in step with canon() so the byte-offset hint works for both forms.
+  if (Array.isArray(type) && type.length === 2 && typeof type[1] === "number") {
+    const s = sizeOf(type[0], types, seen);
+    return s == null ? null : s * type[1];
+  }
   if (type && typeof type === "object") {
     if (type.array) {
       const [inner, len] = type.array;
@@ -287,6 +312,19 @@ function diffAccount(
   const o = oldL.fields, n = newL.fields;
   const common = Math.min(o.length, n.length);
 
+  // Name sets decide whether a same-type / different-name position is a genuine
+  // byte-compatible rename-or-swap, or an insertion/removal/reorder masquerading as one.
+  // A same-type name change is byte-safe ONLY if it is (a) a permutation of an UNCHANGED
+  // name set (a field swap), or (b) a clean isolated relabel (the old name vanished from
+  // the struct entirely and the new name is brand new). If instead the old name STILL
+  // exists elsewhere in the new struct (the field moved) or a name was inserted/dropped,
+  // then from that offset on every field reads a DIFFERENT field's bytes even when the
+  // widths happen to line up — silent semantic corruption, which is BREAKING.
+  const oldNames = new Set(o.map((f) => f.name));
+  const newNames = new Set(n.map((f) => f.name));
+  const sameNameSet =
+    o.length === n.length && o.every((f) => newNames.has(f.name)) && n.every((f) => oldNames.has(f.name));
+
   // Walk the shared prefix. A type/identity divergence shifts all following bytes;
   // a same-type rename does not, so we note it and keep scanning. `unresolved`
   // collects any nested `defined` type we couldn't see inside (missing from types[]):
@@ -323,11 +361,30 @@ function diffAccount(
     }
 
     if (!sameName && sameType) {
-      // Pure rename: identical bytes at the same offset. Non-fatal; keep scanning.
-      renameNotes.push(
-        `field at index ${i} renamed "${o[i].name}" -> "${n[i].name}" (same type, byte-compatible on the ` +
-        `wire, but clients/IDL consumers key on field names — confirm intent)`);
-      continue;
+      const isPermutation = sameNameSet; // swap of same-typed fields; name set unchanged
+      const isIsolatedRename = !newNames.has(o[i].name) && !oldNames.has(n[i].name);
+      if (isPermutation || isIsolatedRename) {
+        // Genuinely byte-compatible at this offset (a swap or a 1:1 relabel). Identical
+        // bytes, same offset. Non-fatal; keep scanning. Clients/IDL consumers key on
+        // names, so confirm intent.
+        renameNotes.push(
+          `field at index ${i} ${isPermutation ? "reordered/renamed" : "renamed"} "${o[i].name}" -> ` +
+          `"${n[i].name}" (same type, byte-compatible on the wire, but clients/IDL consumers key on field ` +
+          `names — confirm intent)`);
+        continue;
+      }
+      // Same type, but the field set shifted structurally: the old name "${o[i].name}"
+      // still exists elsewhere in the new struct, or a name was inserted/dropped. This is
+      // an insertion/removal/reorder, NOT a rename. The byte WIDTH may coincidentally
+      // match (so an old account can still deserialize), but from index ${i} on every
+      // field now reads a different field's bytes — silent semantic corruption.
+      reasons.push(
+        `field at index ${i} changed identity "${o[i].name}" -> "${n[i].name}" (same type) while the field ` +
+        `set changed — an insertion/removal/reorder, not a rename: "${o[i].name}" still exists elsewhere ` +
+        `or a field was inserted/dropped, so from index ${i} on every field reads a different field's bytes ` +
+        `(deserialization may still "succeed" with scrambled values — wrong balances/owners)`);
+      divergedAt = i;
+      break;
     }
 
     // Name AND type differ at this position: insertion / removal / reorder.

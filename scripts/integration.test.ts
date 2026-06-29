@@ -116,6 +116,8 @@ if (!hasBash || !existsSync(installSh)) {
     check("installed: SKILL.md present", existsSync(join(skillDir, "SKILL.md")), true);
     check("installed: example fixtures present", existsSync(join(skillDir, "examples", "vault.v1.idl.json")), true);
     check("installed: command present", existsSync(join(target, ".claude", "commands", "check-upgrade.md")), true);
+    check("installed: reviewer agent present", existsSync(join(target, ".claude", "agents", "upgrade-safety-reviewer.md")), true);
+    check("installed: account-layout rule present", existsSync(join(skillDir, "rules", "account-layout.md")), true);
 
     // installer must NOT drag in node_modules / lockfile / scratch
     const scriptsDir = join(skillDir, "scripts");

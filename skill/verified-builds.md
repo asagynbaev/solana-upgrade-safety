@@ -49,8 +49,15 @@ solana-verify verify-from-repo \
 ```
 
 This builds the given commit in the container, hashes it, fetches the on-chain
-program hash, and tells you if they match. Optionally submit the verification to a
-public registry so wallets/explorers can display "verified" for your program.
+program hash, and tells you if they match.
+
+To publish the verification to the public OtterSec registry (`verify.osec.io`) so
+wallets/explorers display "verified" for your program, submit a remote job (the old
+`--remote` flag on `verify-from-repo` is deprecated):
+
+```bash
+solana-verify remote submit-job --program-id <PROGRAM_ID> --uploader <YOUR_ADDRESS>
+```
 
 ## How to use it in the upgrade flow
 

@@ -19,10 +19,12 @@ done
 DEST="$TARGET/$DIRNAME"
 SKILL_DEST="$DEST/skills/solana-upgrade-safety"
 CMD_DEST="$DEST/commands"
+AGENT_DEST="$DEST/agents"
 
 # Clean sync of the skill dir so files removed upstream don't linger on re-run.
 rm -rf "$SKILL_DEST"
-mkdir -p "$SKILL_DEST/scripts" "$SKILL_DEST/examples" "$SKILL_DEST/tests/fixtures" "$CMD_DEST"
+mkdir -p "$SKILL_DEST/scripts" "$SKILL_DEST/examples" "$SKILL_DEST/tests/fixtures" \
+         "$SKILL_DEST/rules" "$CMD_DEST" "$AGENT_DEST"
 cp -R "$SRC_DIR/skill/." "$SKILL_DEST/"
 # Copy the tool sources + tests — never node_modules / lockfile / scratch files
 # (the user runs `npm install` in the destination, see Next steps below).
@@ -31,9 +33,14 @@ cp "$SRC_DIR/scripts/layout-diff.ts" "$SRC_DIR/scripts/test.ts" \
 cp "$SRC_DIR"/examples/*.idl.json "$SKILL_DEST/examples/"
 cp "$SRC_DIR"/tests/fixtures/*.idl.json "$SKILL_DEST/tests/fixtures/"
 cp "$SRC_DIR/commands/check-upgrade.md" "$CMD_DEST/check-upgrade.md"
+# The auto-loading rule travels with the skill; the agent goes to the agents dir.
+cp "$SRC_DIR"/rules/*.md "$SKILL_DEST/rules/"
+cp "$SRC_DIR"/agents/*.md "$AGENT_DEST/"
 
 echo "✓ installed solana-upgrade-safety into $SKILL_DEST"
 echo "✓ installed /check-upgrade into $CMD_DEST"
+echo "✓ installed upgrade-safety-reviewer agent into $AGENT_DEST"
+echo "✓ installed account-layout rule into $SKILL_DEST/rules"
 echo
 echo "Next:"
 echo "  1) cd $SKILL_DEST/scripts && npm install   # installs tsx for the differ"
@@ -42,3 +49,6 @@ echo
 echo "     - **Upgrading a live program?** Before any redeploy that changes an"
 echo "       account struct, load skills/solana-upgrade-safety/SKILL.md and run"
 echo "       /check-upgrade. Catches account-layout breaks before they brick state."
+echo
+echo "  3) (optional) wire rules/account-layout.md into your kit's rules loader so it"
+echo "     auto-fires on *.rs account-struct / IDL edits."

@@ -4,6 +4,15 @@ The layout is safe and the build is verified — now ship it without fumbling th
 deploy itself. This covers the upgradeable-loader model, buffer deploys, multisig
 authority, the immutability decision, and rollback.
 
+> **Scope / no duplication.** Generic deploy mechanics — environment progression,
+> buffer/multisig proposal flow, cost, plain rollback — are owned by the kit's
+> `deployment.md` / `/deploy`; treat that as canonical and don't reimplement it. The
+> recap below exists so this skill stands alone, but the parts that are *unique to an
+> upgrade-safety gate* are what matter here: **(1)** the *review packet* (layout diff +
+> verified hash + fork-sim result) the multisig approves against, **(2)** the
+> immutability-vs-future-migration tradeoff, and **(3)** the layout-aware rollback
+> caveat — rolling back the *code* does not roll back *migrated accounts*.
+
 ## The upgradeable loader model
 
 A program deployed with the upgradeable BPF loader is two accounts:
@@ -32,8 +41,11 @@ solana program write-buffer target/deploy/vault.so
 # 2. (recommended) set the buffer authority to your multisig so it can approve
 solana program set-buffer-authority <BUFFER_ADDRESS> --new-buffer-authority <MULTISIG>
 
-# 3. Upgrade the program from the buffer (this is the activation step)
-solana program upgrade <BUFFER_ADDRESS> <PROGRAM_ID> --upgrade-authority <AUTH>
+# 3. Activate the program from the buffer — this IS the upgrade. (There is no
+#    `solana program upgrade` subcommand; on the upgradeable loader an upgrade is a
+#    `deploy` that targets an existing program id and consumes a pre-written buffer.)
+solana program deploy --program-id <PROGRAM_ID> --buffer <BUFFER_ADDRESS> \
+  --upgrade-authority <AUTHORITY_KEYPAIR>
 ```
 
 Staging via buffer also lets the multisig review the exact bytecode hash

@@ -10,6 +10,7 @@ description: >-
   Routes to layout-compatibility analysis, safe-evolution patterns, migration
   codegen, mainnet-fork simulation, verified-build proofs, and upgrade-authority
   procedure. Pair with the `layout-diff` script and the `/check-upgrade` command.
+user-invocable: true
 ---
 
 # Solana Upgrade Safety
@@ -20,6 +21,12 @@ no schema evolution; zero-copy is raw `repr(C)` memory. Reorder, insert, remove,
 or resize a field and existing accounts deserialize into garbage — silent data
 corruption, drained vaults, bricked state. This skill is the gate that catches
 that *before* you ship.
+
+Think of it as **schema-breaking-change detection for on-chain account layouts** —
+what Buf does for protobuf, this does for Borsh / zero-copy Solana accounts. It
+*detects and decides* whether an upgrade is safe; Anchor v1.0's
+`Migration<'info, From, To>` account type is the runtime that *executes* a migration
+once you've decided you need one. This skill is the half that runs in front of it.
 
 ## When to use
 
@@ -78,6 +85,8 @@ how do I migrate them*.
 
 - `scripts/layout-diff.ts` — zero-runtime-dependency IDL layout differ (imports only `node:fs`; run via `tsx`; CI-gateable, exits 1 on BREAKING).
 - `commands/check-upgrade.md` — `/check-upgrade` runs the whole gate end to end.
+- `agents/upgrade-safety-reviewer.md` — an Opus reviewer that runs the gate and writes the go/no-go review packet for a multisig proposal.
+- `rules/account-layout.md` — auto-loads when you edit an account struct (`*.rs`) or regenerate an IDL, and reminds you to run the gate before redeploy.
 - `examples/` — fixture IDLs demonstrating a bricking insert vs a safe append.
 
 ## The one rule to remember
