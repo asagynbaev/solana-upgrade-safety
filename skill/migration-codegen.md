@@ -4,6 +4,15 @@ When bytes must move and you can't avoid it, you migrate. This file covers the
 on-chain `migrate` instruction, the `realloc` rules that trip people up, and the
 client-side backfill.
 
+> **Anchor v1.0 ships a migration runtime: `Migration<'info, From, To>`.** It's the
+> *executor* — it deserializes the old account, hands you both shapes to map across,
+> and reallocs/rewrites — once you've already decided a migration is needed. This skill
+> is the *detector* that makes that decision (`layout-diff` → BREAKING/NEEDS_MIGRATION).
+> If you're on Anchor 1.0, prefer `Migration<From, To>` for the execution; the manual
+> pattern below is the version-agnostic equivalent and shows exactly what it does under
+> the hood (read-old → map → realloc → write-new → stamp version), which you still want
+> to understand to get the realloc/zeroing/idempotency rules right.
+
 ## The shape of a migration
 
 A migration has three parts:
