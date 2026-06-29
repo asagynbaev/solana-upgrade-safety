@@ -22,9 +22,10 @@ It is already wired into the kit as an MCP (`surfpool mcp`) and as a CLI.
 ### 1. Start a fork pinned to a recent slot
 
 ```bash
-surfpool start --url https://api.mainnet-beta.solana.com
-# or pin a slot for reproducibility:
-surfpool start --url <rpc> --slot <RECENT_SLOT>
+surfpool start --rpc-url https://api.mainnet-beta.solana.com
+# (mainnet-beta is the default upstream, so bare `surfpool start` works too.)
+# For reproducibility, capture the slot the run forked from (and pin the upstream RPC);
+# check `surfpool start --help` for the slot/freeze options in your version.
 ```
 
 Surfpool lazily fetches any account you touch from the upstream RPC, so you don't
@@ -32,12 +33,15 @@ need to pre-load anything.
 
 ### 2. Deploy the CANDIDATE build over the existing program
 
-On the fork, upgrade the program in place exactly as you would on mainnet (so you
-also exercise the upgrade path itself, not just the new code):
+Upgrade the program in place on the fork so you exercise the new bytecode against
+old state. A direct deploy is fine here — the fork is a sandbox, so you don't need
+the buffer + multisig staging you'd use on mainnet (that flow lives in
+`upgrade-authority.md`):
 
 ```bash
 solana program deploy target/deploy/vault.so \
-  --program-id <PROGRAM_ID> --url http://127.0.0.1:8899
+  --program-id <PROGRAM_ID> --url http://127.0.0.1:8899 \
+  --upgrade-authority <AUTHORITY_KEYPAIR>
 ```
 
 The real `Vault` accounts are still the OLD layout — which is the whole point.
