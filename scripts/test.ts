@@ -222,6 +222,44 @@ check("malformed JSON exit 2", run(idl("{ not json"), idl(acct("A", [u("u64")]))
 check("accounts not an array exit 2", run(idl({ accounts: { foo: "bar" } }), idl({ accounts: { foo: "bar" } })).exit, 2);
 check("unknown flag exit 2", run(idl(acct("A", [u("u64")])), idl(acct("A", [u("u64")])), "--bogus").exit, 2);
 
+// SAME-TYPE INSERTION/REORDER MASKED AS RENAME — the critical false-SAFE class.
+// Inserting a field of the SAME type as its neighbors (often + dropping a trailing
+// field so the count stays equal) used to be misread as a chain of benign "renames"
+// and pass as REVIEW/NEEDS_MIGRATION with exit 0. The bytes' WIDTH lines up so an old
+// account still deserializes, but every field past the insert reads a DIFFERENT field's
+// value (scrambled balances). It MUST be BREAKING. Guarded by the field-name-set test:
+// a name was introduced and/or dropped, so it is not a permutation or an isolated rename.
+expect("same-type mid-insert + trailing-drop (count equal) -> BREAKING (was false REVIEW)",
+  run(idl(acct("A", [{ name: "a", type: "u64" }, { name: "b", type: "u64" }, { name: "c", type: "u64" }])),
+      idl(acct("A", [{ name: "a", type: "u64" }, { name: "x", type: "u64" }, { name: "b", type: "u64" }]))),
+  "A", "BREAKING", 1);
+expect("realistic StakeAccount mid-insert of same-typed field -> BREAKING",
+  run(idl(acct("StakeAccount", [{ name: "owner", type: "pubkey" }, { name: "stakedAmount", type: "u64" }, { name: "rewardDebt", type: "u64" }, { name: "lastClaimSlot", type: "u64" }])),
+      idl(acct("StakeAccount", [{ name: "owner", type: "pubkey" }, { name: "poolId", type: "u64" }, { name: "stakedAmount", type: "u64" }, { name: "rewardDebt", type: "u64" }]))),
+  "StakeAccount", "BREAKING", 1);
+expect("same-type mid-insert with length increase -> BREAKING (was false NEEDS_MIGRATION)",
+  run(idl(acct("A", [{ name: "a", type: "u64" }, { name: "b", type: "u64" }])),
+      idl(acct("A", [{ name: "a", type: "u64" }, { name: "inserted", type: "u64" }, { name: "b", type: "u64" }]))),
+  "A", "BREAKING", 1);
+// Boundary guard: a GENUINE multi-field rename (disjoint name sets, identical positional
+// types, equal count) is still byte-compatible → REVIEW, not over-flagged as BREAKING.
+expect("double rename, same positional types -> REVIEW (byte-compatible, not over-flagged)",
+  run(idl(acct("A", [{ name: "a", type: "u64" }, { name: "b", type: "u64" }])),
+      idl(acct("A", [{ name: "x", type: "u64" }, { name: "y", type: "u64" }]))),
+  "A", "REVIEW", 0);
+
+// bare-tuple fixed-array shorthand ["u8",32] is byte-identical to {array:["u8",32]} —
+// normalize it so a cross-representation diff doesn't raise a phantom BREAKING, while a
+// genuine size change in either form still breaks.
+expect("bare-tuple [u8,32] vs {array:[u8,32]} -> SAFE (representation normalized)",
+  run(idl(acct("A", [{ name: "k", type: ["u8", 32] }, { name: "o", type: "u64" }])),
+      idl(acct("A", [{ name: "k", type: { array: ["u8", 32] } }, { name: "o", type: "u64" }]))),
+  "A", "SAFE", 0);
+expect("bare-tuple genuine size change [u8,32]->[u8,64] -> BREAKING",
+  run(idl(acct("A", [{ name: "k", type: ["u8", 32] }])),
+      idl(acct("A", [{ name: "k", type: ["u8", 64] }]))),
+  "A", "BREAKING", 1);
+
 // ---- report ----------------------------------------------------------------
 
 rmSync(DIR, { recursive: true, force: true });
